@@ -1,11 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using System.Diagnostics;
+using DubinsPaths.State;
 
 namespace DubinsPaths
 {
@@ -14,17 +12,17 @@ namespace DubinsPaths
 		/**** Variables ****/
 
 		private bool running;
-		private bool mousePressed;
-		private bool rotating;
-		private bool moving;
 		private uint targetFps;
-		private uint selectionDistance;
-		private State state;
-		private DirectionalPoint chosenPoint;
 		private Graphics g;
 		private Thread loopThread;
-		private List<DubinsPaths.DubinsPath> paths;
-		private List<string> stateHelp;
+		private StateManager stateManager;
+
+		// Define delegates used for external
+		// cross-thread calls on control elements.
+		delegate void SetTextDelegate(string text);
+		delegate void SetIntegerDelegate(int index);
+		delegate int ReturnIntegerDelegate();
+		delegate bool ReturnBoolDelegate();
 
 
 		/**** Functions ****/
@@ -38,159 +36,26 @@ namespace DubinsPaths
 		{
 			// Define variables and constants.
 			running = true;
-			mousePressed = false;
-			rotating = false;
-			moving = false;
 			targetFps = 30;
-			selectionDistance = 30;
-			state = State.settingStart;
-
+			
 			// Create objects.
 			g = pictureBox.CreateGraphics();
-			g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-			stateHelp = new List<string>();
+			g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;			
 
-			// Build help strings.
-			StringBuilder sb = new StringBuilder();
-			sb.Append(@"{\rtf\ansi\b Any mouse button: \b0 Set start point.");
-			sb.Append(@"\line Drag to change angle.}");
-			stateHelp.Add(sb.ToString());
-			sb.Clear();
-
-			sb.Append(@"{\rtf\ansi\b Any mouse button: \b0 Set target point.");
-			sb.Append(@"\line Drag to change angle.}");
-			stateHelp.Add(sb.ToString());
-			sb.Clear();
-
-			sb.Append(@"{\rtf\ansi\b Left mouse button: \b0 Click to move point.");
-			sb.Append(@"\line\line\b Right mouse button: \b0 Change angle.}");
-			stateHelp.Add(sb.ToString());
-			sb.Clear();
-
-			// Create dubins paths.
-			paths = new List<DubinsPaths.DubinsPath>();
-			paths.Add(new DubinsPaths.DubinsPathCSC(Rotation.Right, Rotation.Right));
-			paths.Add(new DubinsPaths.DubinsPathCSC(Rotation.Right, Rotation.Left));
-			paths.Add(new DubinsPaths.DubinsPathCSC(Rotation.Left, Rotation.Right));
-			paths.Add(new DubinsPaths.DubinsPathCSC(Rotation.Left, Rotation.Left));
-			paths.Add(new DubinsPaths.DubinsPathCCC(Rotation.Right));
-			paths.Add(new DubinsPaths.DubinsPathCCC(Rotation.Left));
+			// State manager.
+			stateManager = new StateManager();
+			stateManager += new StateSettingStart(this);
+			stateManager += new StateSettingTarget(this);
+			stateManager += new StateAllSet(this);
 
 			// Gui.
-			helpBox.Rtf = stateHelp[(int)state];
-			textBoxRadius.Text = paths[0].RMin.ToString();
 			trajectoryList.SelectedIndex = 0;
+			textBoxRadius.Text = stateManager.ActiveState.RMin.ToString();
 
 			// Start looping thread.
 			loopThread = new Thread(Loop);
 			loopThread.Start();
 		}
-
-		private void pictureBox_MouseDown(object sender, MouseEventArgs e)
-		{
-			mousePressed = true;
-
-			// If the start and target points are not set yet, save the
-			// location the user clicked on as one of them.
-			if (state != State.allSet)
-			{
-				DirectionalPoint point = new DirectionalPoint(new Point(e.X, e.Y), 0);
-				if (state == State.settingStart)
-					paths.AsParallel().ForAll(x => x.Start = point);
-				else
-					paths.AsParallel().ForAll(x => x.Target = point);
-			}
-			else
-			{
-				// Distance cursor - start point.
-				int dx = paths[0].Start.X - e.X;
-				int dy = paths[0].Start.Y - e.Y;
-				uint distanceStart = (uint)Math.Sqrt(dx * dx + dy * dy);
-				// Distance cursor - target point.
-				dx = paths[0].Target.X - e.X;
-				dy = paths[0].Target.Y - e.Y;
-				uint distanceTarget = (uint)Math.Sqrt(dx * dx + dy * dy);
-				
-				// Start moving / rotating, if the cursor is near a point.
-				if(distanceStart <= selectionDistance ||
-					distanceTarget <= selectionDistance)
-				{
-					// Choose the point. The start and target points of all
-					// DubinsPath objects reference the same data.
-					if (distanceStart < distanceTarget)
-					{
-						chosenPoint = paths[0].Start;
-					}
-					else
-					{
-						chosenPoint = paths[0].Target;
-					}
-					// Activate moving or rotating mode
-					// dependant on the button pressed.
-					if (e.Button == MouseButtons.Left)
-					{
-						moving = true;
-					}
-					else if (e.Button == MouseButtons.Right)
-					{
-						rotating = true;
-					}
-				}
-			}
-		}
-
-		private void pictureBox_MouseMove(object sender, MouseEventArgs e)
-		{
-			if (!mousePressed) return;
-
-			if (state != State.allSet)
-			{
-				// Choose point to manipulate.
-				DirectionalPoint point;
-				if (state == State.settingStart)
-					point = paths[0].Start;
-				else
-					point = paths[0].Target;
-
-				// Calculate angle from point to cursor.
-				point.Angle = AngleBetweenPoints(point.Position, e.Location);
-			}
-			else if(rotating)
-			{
-				chosenPoint.Angle = AngleBetweenPoints(chosenPoint.Position, e.Location);
-			}
-			else if(moving)
-			{
-				chosenPoint.Position = e.Location;
-			}
-		}
-
-		private float AngleBetweenPoints(Point pointA, Point pointB)
-		{
-			float angle = 0;
-			float dx = pointB.X - pointA.X;
-			float dy = pointA.Y - pointB.Y;
-			angle = (float)Math.Atan2(dy, dx);
-			return (angle);
-		}
-
-		private void pictureBox_MouseUp(object sender, MouseEventArgs e)
-		{
-			mousePressed = false;
-			moving = false;
-			rotating = false;
-
-			// Transistion into the next state.
-			if (state != State.allSet)
-			{
-				state++;
-				helpBox.Rtf = stateHelp[(int)state];
-			}
-		}
-
-		delegate void SetTextCallback(string text);
-		delegate void SetSelectedCallback(int index);
-		delegate bool IsCheckedCallback();
 
 		/// <summary>
 		/// Main loop updating and rendering the dubins paths.
@@ -205,48 +70,10 @@ namespace DubinsPaths
 			{
 				fpsStopwatch.Restart();
 
-				for (int i = 0; i < paths.Count; i++)
-				{
-					paths[i].Update();
-				}
-
-				// Choose shortest path.
-				IsCheckedCallback callbackChecked = () =>
-				{ return (checkBoxUseShortest.Checked); };
-				bool isChecked = (bool)Invoke(callbackChecked);
-
-				if (isChecked)
-				{
-					int shortestIndex = 0;
-					float minimalDistance = float.PositiveInfinity;
-					for (int i = 0; i < paths.Count; i++)
-					{
-						if (paths[i].Valid && paths[i].Length < minimalDistance)
-						{
-							shortestIndex = i;
-							minimalDistance = paths[i].Length;
-						}
-					}
-
-					SetSelectedCallback callbackSetSelected = (int index) =>
-					{ trajectoryList.SelectedIndex = index; };
-					Invoke(callbackSetSelected, new object[] { shortestIndex });
-				}
-
 				// Update and render to backbuffer.
 				backGraphics.Clear(Color.White);
-
-				Func<int> function = new Func<int>(() =>
-					{ return (trajectoryList.SelectedIndex); });
-				int selectedIndex = (int)trajectoryList.Invoke(function);
-				if (selectedIndex >= 0)
-				{
-					paths[selectedIndex].Render(backGraphics);
-					string lengthString = paths[selectedIndex].Length.ToString();
-					SetTextCallback callbackSetText = (string text) =>
-						{ labelLength.Text = text; };
-					Invoke(callbackSetText, new object[] { lengthString });
-				}
+				stateManager.Update();
+				stateManager.Render(backGraphics);
 
 				// Display backbuffer.
 				g.DrawImage(backBuffer, 0, 0);
@@ -262,16 +89,136 @@ namespace DubinsPaths
 		}
 
 		/// <summary>
-		/// Resets the state to the first state and deletes the dubins paths.
+		/// Sets the text for the help box displayed to the user.
+		/// </summary>
+		/// <param name="text">The help text.</param>
+		public void SetHelpText(string text)
+		{
+			if(!helpBox.InvokeRequired)
+			{
+				// If the calling method and the help box live within the same
+				// thread, the text may be set directly.
+				// This code may fail, if the provided text is not formatted
+				// as proper rtf.
+				try
+				{
+					helpBox.Rtf = text;
+				}
+				catch { }
+			}
+			else
+			{
+				// If the method is called from a different thread as the one
+				// the help box is created for, it has to be recursivly invoked
+				// for that thread.
+				SetTextDelegate myDelegate = SetHelpText;
+				helpBox.Invoke(myDelegate, new object[] { text });
+			}
+		}
+
+		/// <summary>
+		/// Sets the length of the dubins path.
+		/// </summary>
+		/// <param name="length">The length of the path.</param>
+		public void SetPathLength(string length)
+		{
+			if (!labelLength.InvokeRequired)
+			{
+				labelLength.Text = length;
+			}
+			else
+			{
+				// If the method is called from a different thread as the one
+				// the help box is created for, it has to be recursivly invoked
+				// for that thread.
+				SetTextDelegate myDelegate = SetPathLength;
+				labelLength.Invoke(myDelegate, new object[] { length });
+			}
+		}
+
+		/// <summary>
+		/// Returns whether the shortest dubins path
+		/// should always be the one displayed.
+		/// </summary>
+		/// <returns></returns>
+		public bool UseShortestIsChecked()
+		{
+			// Same game as in SetHelpText - if neccessary, the method is
+			// invoked in the thread the the control element was created for.
+			if (!checkBoxUseShortest.InvokeRequired)
+			{
+				return (checkBoxUseShortest.Checked);
+			}
+			else
+			{
+				ReturnBoolDelegate myDelegate = UseShortestIsChecked;
+				bool isChecked = (bool)helpBox.Invoke(myDelegate);
+				return (isChecked);
+			}
+		}
+
+		/// <summary>
+		/// Returns the index of the currently selected dubins path.
+		/// </summary>
+		/// <returns></returns>
+		public int GetSelectedPath()
+		{
+			// See SetHelpText for detailled explanation.
+			if (!trajectoryList.InvokeRequired)
+			{
+				return (trajectoryList.SelectedIndex);
+			}
+			else
+			{
+				ReturnIntegerDelegate myDelegate = GetSelectedPath;
+				int index = (int)trajectoryList.Invoke(myDelegate);
+				return (index);
+			}
+		}
+
+		/// <summary>
+		/// Sets the currently selected dubins path.
+		/// </summary>
+		/// <returns>
+		/// The index of the dubins path within the trajectory list to be selected.
+		/// </returns>
+		public void SetSelectedPath(int index)
+		{
+			// See SetHelpText for detailed explanation.
+			if (!trajectoryList.InvokeRequired)
+			{
+				trajectoryList.SelectedIndex = index;
+			}
+			else
+			{
+				SetIntegerDelegate myDelegate = SetSelectedPath;
+				trajectoryList.Invoke(myDelegate, new object[] { index });
+			}
+		}
+
+		private void pictureBox_MouseDown(object sender, MouseEventArgs e)
+		{
+			stateManager.MouseDown(sender, e);
+		}
+
+		private void pictureBox_MouseMove(object sender, MouseEventArgs e)
+		{
+			stateManager.MouseMove(sender, e);
+		}
+
+		private void pictureBox_MouseUp(object sender, MouseEventArgs e)
+		{
+			stateManager.MouseUp(sender, e);
+		}
+
+		/// <summary>
+		/// Resets the state to the initial state.
 		/// </summary>
 		/// <param name="sender"></param>
 		/// <param name="e"></param>
 		private void buttonReset_Click(object sender, EventArgs e)
 		{
-			state = State.settingStart;
-			helpBox.Rtf = stateHelp[(int)state];
-			paths.AsParallel().ForAll(x => x.Start = null);
-			paths.AsParallel().ForAll(x => x.Target = null);
+			stateManager.ActivateStateByName("StateSettingStart");
 		}
 
 		/// <summary>
@@ -293,11 +240,17 @@ namespace DubinsPaths
 			try
 			{
 				float rMin = (float)Convert.ToDouble(textBoxRadius.Text);
-				paths.AsParallel().ForAll(x => x.RMin = rMin);
+				stateManager.ActiveState.RMin = rMin;
 			}
 			catch { };
 		}
 
+		/// <summary>
+		/// If the checkbox is toggled, the trajectory list is activated or
+		/// deactivated.
+		/// </summary>
+		/// <param name="sender"></param>
+		/// <param name="e"></param>
 		private void checkBoxUseShortest_CheckedChanged(object sender, EventArgs e)
 		{
 			if(checkBoxUseShortest.Checked)
@@ -309,15 +262,5 @@ namespace DubinsPaths
 				trajectoryList.Enabled = true;
 			}
 		}
-	}
-
-	/// <summary>
-	/// Represents the different states the software can be in.
-	/// </summary>
-	enum State
-	{
-		settingStart,
-		settingTarget,
-		allSet
 	}
 }
